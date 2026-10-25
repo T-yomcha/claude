@@ -27,8 +27,8 @@ from collections import namedtuple
 
 import isa
 
-CODE_SIZE = 256
-DATA_SIZE = 256
+CODE_SIZE = 32
+DATA_SIZE = 32
 
 NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 EXPR_RE = re.compile(r"^[A-Z0-9_+\-]+$")

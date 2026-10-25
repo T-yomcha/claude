@@ -4,6 +4,7 @@
 """
 import os
 import random
+import re
 import sys
 import time
 import unittest
@@ -170,8 +171,10 @@ class AssemblerTest(unittest.TestCase):
 
     def test_code_overflow(self):
         with self.assertRaises(AsmError):
-            assemble("NOP " * 257)
-        self.assertEqual(len(assemble("NOP " * 256).code), 256)
+            assemble("NOP " * 33)
+        self.assertEqual(len(assemble("NOP " * 32).code), 32)
+        with self.assertRaises(AsmError):
+            assemble(".data\n.space 33")
 
     def test_listing(self):
         text = format_listing(assemble(load_source(TASK1)))
@@ -184,8 +187,8 @@ class CpuTest(unittest.TestCase):
     def test_initial_state(self):
         cpu = StackCPU()
         self.assertEqual((cpu.pc, cpu.ir, cpu.mar, cpu.mdr, cpu.sp, cpu.flags), (0, 0, 0, 0, 0, 0))
-        self.assertEqual(len(cpu.cmem), 256)
-        self.assertEqual(len(cpu.dmem), 256)
+        self.assertEqual(len(cpu.cmem), 32)
+        self.assertEqual(len(cpu.dmem), 32)
 
     def test_ticks_per_instruction(self):
         cpu = StackCPU()
@@ -370,10 +373,10 @@ class CpuTest(unittest.TestCase):
         with self.assertRaises(CPUError):
             cpu.run()
         cpu = StackCPU()
-        cpu.load([isa.encode("NOP")] * 256, [])
+        cpu.load([isa.encode("NOP")] * 32, [])
         with self.assertRaises(CPUError) as ctx:
             cpu.run()
-        self.assertIn("PC = 256", str(ctx.exception))
+        self.assertIn("PC = 32", str(ctx.exception))
 
     def test_run_limit(self):
         prog = assemble("L: JMP L")
@@ -403,23 +406,30 @@ class CpuTest(unittest.TestCase):
         self.assertEqual(cpu.dmem[0], 77)
 
 
+def with_array(source, label, values):
+    """Заменить строку «LABEL: .word …» в тексте программы новым массивом."""
+    values = list(values)
+    line = f"{label}: .word " + ", ".join(map(str, [len(values)] + values))
+    new, count = re.subn(rf"^{label}:.*$", line, source, flags=re.M)
+    assert count == 1
+    return new
+
+
 class Task1MaxTest(unittest.TestCase):
     def setUp(self):
-        self.prog = assemble(load_source(TASK1))
-        self.base = self.prog.data_addr("ARR")
-        self.max_addr = self.prog.data_addr("MAX")
-        self.capacity = self.max_addr - self.base - 1
+        self.source = load_source(TASK1)
 
     def run_with(self, values):
-        data = list(self.prog.data)
-        tasks.write_array(data, self.base, values)
-        cpu = StackCPU()
-        cpu.load(self.prog.code, data)
-        cpu.run()
+        prog, cpu = run_source(with_array(self.source, "ARR", values))
         self.assertTrue(cpu.halted)
         self.assertIsNone(cpu.error)
         self.assertEqual(cpu.stack, [], "стек должен остаться пустым")
-        return cpu.dmem[self.max_addr]
+        return cpu.dmem[prog.data_addr("MAX")]
+
+    def test_fits_memory(self):
+        prog = assemble(self.source)
+        self.assertLessEqual(len(prog.code), 32)
+        self.assertEqual(prog.data_addr("ARR"), 0)   # адрес ARR[i] = i
 
     def test_example(self):
         prog, cpu = run_source(load_source(TASK1))
@@ -437,6 +447,8 @@ class Task1MaxTest(unittest.TestCase):
             [40000, 30000, 50000, 100, 200, 300],
             [42],
             [],
+            list(range(1, 16)),                  # 15 элементов
+            list(range(30, 0, -1)),              # 30 элементов — заняты все 32 ячейки
         ]
         for values in cases:
             with self.subTest(values=values):
@@ -445,7 +457,7 @@ class Task1MaxTest(unittest.TestCase):
     def test_random_arrays(self):
         rnd = random.Random(12)
         for _ in range(300):
-            n = rnd.randint(6, self.capacity)
+            n = rnd.randint(6, 15)
             values = [rnd.randint(0, 65535) for _ in range(n)]
             self.assertEqual(self.run_with(values), max(values), values)
 
@@ -499,6 +511,19 @@ class Task2ConvolutionTest(unittest.TestCase):
             a = [rnd.randint(0, 65535) for _ in range(6)]
             b = [rnd.randint(0, 65535) for _ in range(6)]
             self.assertEqual(self.run_with(a, b), tasks.expected_convolution(a, b), (a, b))
+
+    def test_fits_memory(self):
+        self.assertLessEqual(len(self.prog.code), 32)
+        self.assertEqual(self.a, 0)                   # адрес A[i] = i
+
+    def test_other_length(self):
+        rnd = random.Random(5)
+        a = [rnd.randint(0, 65535) for _ in range(13)]
+        b = [rnd.randint(0, 65535) for _ in range(13)]
+        source = with_array(with_array(load_source(TASK2), "A", a), "B", b)
+        prog, cpu = run_source(source)
+        self.assertEqual(tasks.convolution_result(prog, cpu.dmem),
+                         tasks.expected_convolution(a, b))
 
     def test_uses_long_arithmetic(self):
         mnemonics = {isa.disassemble(w).split()[0] for w in self.prog.code}
